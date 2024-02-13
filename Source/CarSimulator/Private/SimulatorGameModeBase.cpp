@@ -552,7 +552,7 @@ std::vector<ASimulatorGameModeBase::DetectResult> ASimulatorGameModeBase::getDet
         }
     }
 
-    cv::dnn::NMSBoxes(boundingBoxes, scores, 0.5, 0.2, indices);
+    cv::dnn::NMSBoxes(boundingBoxes, scores, 0.5, 0.3, indices);
 
     for (int i = 0; i < indices.size(); i++) {
         int idx = indices[i];
