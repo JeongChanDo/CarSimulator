@@ -442,7 +442,7 @@ void ASimulatorGameModeBase::wheelCheck(cv::Mat frame, bool& wheelLeftChecked, b
 
         float leftOverlapRatio = static_cast<float>(intersectionPixelsLeft) / (circleRadius * circleRadius * CV_PI);
 
-        if (leftOverlapRatio > 0.8)
+        if (leftOverlapRatio > 0.4)
         {
             cv::circle(frame, wheelStartPoint + rotatedLeftPoint, 30, cv::Scalar(255, 0, 0), -1);
             wheelLeftChecked = true;
@@ -457,7 +457,7 @@ void ASimulatorGameModeBase::wheelCheck(cv::Mat frame, bool& wheelLeftChecked, b
         int intersectionPixelsRight = cv::countNonZero(intersectionImageRight);
         float rightOverlapRatio = static_cast<float>(intersectionPixelsRight) / (circleRadius * circleRadius * CV_PI);
 
-        if (rightOverlapRatio > 0.8)
+        if (rightOverlapRatio > 0.4)
         {
             cv::circle(frame, wheelStartPoint + rotatedRightPoint, 30, cv::Scalar(0, 255, 0), -1);
             wheelRightChecked = true;

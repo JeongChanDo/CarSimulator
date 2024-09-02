@@ -37,8 +37,8 @@ public:
 
 	int blazeHandSize = 256;
 	int blazePalmSize = 128;
-	float palmMinScoreThresh = 0.7;
-	float palmMinNMSThresh = 0.4;
+	float palmMinScoreThresh = 0.5;
+	float palmMinNMSThresh = 0.3;
 	int palmMinNumKeyPoints = 7;
 
 	void ResizeAndPad(
