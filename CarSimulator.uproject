@@ -1,6 +1,6 @@
 {
 	"FileVersion": 3,
-	"EngineAssociation": "5.3",
+	"EngineAssociation": "5.4",
 	"Category": "",
 	"Description": "",
 	"Modules": [
@@ -31,22 +31,12 @@
 			"Enabled": true
 		},
 		{
-			"Name": "NNE",
-			"Enabled": true,
-			"SupportedTargetPlatforms": [
-				"Win64",
-				"Linux",
-				"Mac"
-			]
+			"Name": "NNERuntimeBasicCpu",
+			"Enabled": true
 		},
 		{
-			"Name": "NNERuntimeORTCpu",
-			"Enabled": true,
-			"SupportedTargetPlatforms": [
-				"Win64",
-				"Linux",
-				"Mac"
-			]
+			"Name": "NNERuntimeORT",
+			"Enabled": true
 		}
 	]
 }

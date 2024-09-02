@@ -12,6 +12,9 @@
 void ASimulatorGameModeBase::BeginPlay()
 {
 	Super::BeginPlay();
+
+    blaze = Blaze();
+
 	capture = cv::VideoCapture(0);
 
 	if (!capture.isOpened())
@@ -26,21 +29,10 @@ void ASimulatorGameModeBase::BeginPlay()
 	width = image.cols;
 	height = image.rows;
 
-    net_det = cv::dnn::readNetFromONNX("C:/palm_detection.onnx");
     nextIndex = 0; //tracking id
 
     wheelImage = cv::imread("C:/wheel.png", cv::IMREAD_UNCHANGED);
     cv::resize(wheelImage, wheelImage, cv::Size(240, 240));
-
-    handRoiRect = cv::Rect(120, 240, 520, 240);
-    objDetectRoiRect = cv::Rect(120, 40, 520, 440);
-    detectInput = cv::Size(128, 128);
-    detectOutput = cv::Size(objDetectRoiRect.width, objDetectRoiRect.height);
-
-    morphKernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(20, 20));
-    skinLowerBound = cv::Scalar(0, 48, 80);  // 살색의 하한값
-    skinUpperBound = cv::Scalar(20, 255, 255);  // 살색의 상한값
-
 
 
     //휠제어 변수들
@@ -48,6 +40,7 @@ void ASimulatorGameModeBase::BeginPlay()
     wheelCenter = cv::Point2f(120, 120);
     wheelLeftPoint = cv::Point2f(0, 120);
     wheelRightPoint = cv::Point2f(240, 120);
+
     // 좌표를 2차원 행렬로 변환
     wheelPoints = cv::Mat(3, 1, CV_64FC2);
     wheelPoints.at<cv::Vec2d>(0, 0) = cv::Vec2d(wheelLeftPoint.x, wheelLeftPoint.y);
@@ -58,31 +51,6 @@ void ASimulatorGameModeBase::BeginPlay()
 
     isOutOfControlButton = true;
     control = 0;
-
-
-
-    // 머리 자세 추론
-    head_roi = cv::Rect(120, 0, 400, 400);
-    head_image_size = cv::Size(int(head_roi.width / 2), int(head_roi.height / 2));
-    backend_id = str2backend.at("opencv");
-    target_id = str2target.at("cpu");
-    cliped_xdiff = 0;
-
-    figure_points_3D = get_figure_points_3D();
-    camera_matrix = get_camera_matrix();
-    distortion_coeff = get_distortion_coeff();
-    vector_rotation = (cv::Mat_<double>(3, 1) << 0, 0, 0);
-    vector_translation = (cv::Mat_<double>(3, 1) << 0, 0, 0);
-
-    model = YuNet(
-        "c:/yunet.onnx",
-        head_image_size,
-        0.6,
-        0.3,
-        3000,
-        backend_id,
-        target_id
-    );
 
     //손 변수
     is_handle = false;
@@ -102,7 +70,8 @@ void ASimulatorGameModeBase::ReadFrame()
 	}
 	capture.read(image);
 
-	Inference();
+
+    Inference();
 
 	imageTexture = MatToTexture2D(image);
 }
@@ -127,13 +96,13 @@ UTexture2D* ASimulatorGameModeBase::MatToTexture2D(const cv::Mat InMat)
 		void* Data = Mip.BulkData.Lock(LOCK_READ_WRITE);//lock the texture data
 		FMemory::Memcpy(Data, bgraImage.data, bgraImage.total() * bgraImage.elemSize());//copy the data
 		Mip.BulkData.Unlock();
-		Texture->PostEditChange();
+		//Texture->PostEditChange();
 		Texture->UpdateResource();
 		return Texture;
 	}
 	UE_LOG(LogTemp, Log, TEXT("CV_8UC3"));
 	//if the texture hasnt the right pixel format, abort.
-	Texture->PostEditChange();
+	//Texture->PostEditChange();
 	Texture->UpdateResource();
 	return Texture;
 }
@@ -144,85 +113,34 @@ UTexture2D* ASimulatorGameModeBase::MatToTexture2D(const cv::Mat InMat)
 void ASimulatorGameModeBase::Inference()
 {
 
-	auto time_start = std::chrono::steady_clock::now();
+
+
+    auto time_start = std::chrono::steady_clock::now();
     cv::flip(image, image, 1);
 
     /*
-    손 검출 파트
+    get filtered detections
     */
-    std::vector<cv::Rect> skinRegions = getSkinRegions(image, handRoiRect, skinLowerBound, skinUpperBound, morphKernel);
-    //skinRegions로 trackedRects 구함(등록, 생명주기 확인, 제거)
-    trackedRectsMap = getTrackedRects(trackedRectsMap, skinRegions, nextIndex);
-    // 객체 탐지 및 결과 반환
-    cv::Mat detectFrame = image(objDetectRoiRect).clone();
-    std::vector<DetectResult> detectResults = getDetectResults(detectFrame, net_det, detectInput, detectOutput);
+    blaze.ResizeAndPad(image, img256, img128, scale, pad);
+    //UE_LOG(LogTemp, Log, TEXT("scale value: %f, pad value: (%f, %f)"), scale, pad[0], pad[1]);
+    std::vector<Blaze::PalmDetection> normDets = blaze.PredictPalmDetections(img128);
+    std::vector<Blaze::PalmDetection> denormDets = blaze.DenormalizePalmDetections(normDets, webcamWidth, webcamHeight, pad);
+    std::vector<Blaze::PalmDetection> filteredDets = blaze.FilteringDets(denormDets, webcamWidth, webcamHeight);
 
 
-    /*
-    머리 자세 추론 파트
-    */
-    cv::Mat head_area = image(head_roi);
-    model.setInputSize(head_image_size);
-    cv::Mat resized_head;
-    cv::resize(head_area, resized_head, head_image_size);
-    cv::Mat faces = model.infer(resized_head);
-
-    cv::Mat image_points_2D = get_image_points_2D();
-    if (visualize(head_area, faces, image_points_2D))
-    {
-        estimate_chin(image_points_2D);
-        cv::circle(head_area, cv::Point(int(image_points_2D.at<double>(5, 0)), int(image_points_2D.at<double>(5, 1))), 2, cv::Scalar(255, 255, 255), 2);
-
-    }
-
-    if (cv::solvePnPRansac(
-        figure_points_3D,
-        image_points_2D,
-        camera_matrix,
-        distortion_coeff,
-        vector_rotation,
-        vector_translation
-    ))
-    {
-        std::vector<cv::Point2d> pose_points = get_pose_points(image_points_2D, vector_rotation, vector_translation, camera_matrix, distortion_coeff);
-        cv::line(head_area, pose_points[0], pose_points[1], cv::Scalar(255, 255, 255), 2);
-        int x_diff = pose_points[0].x - pose_points[1].x;
-        xdiff_vector.push_back(x_diff);
-        cv::putText(head_area, cv::format("%d", x_diff), cv::Point(pose_points[0].x - 10, pose_points[0].y - 20), cv::FONT_HERSHEY_DUPLEX, 1, cv::Scalar(0, 0, 0));
-        if (xdiff_vector.size() == 15)
-        {
-            xdiff_vector.erase(xdiff_vector.begin());
-            cliped_xdiff = clip_avg(xdiff_vector);
-            cv::putText(head_area, cv::format("%.1f", cliped_xdiff), cv::Point(pose_points[0].x + 40, pose_points[0].y - 20), cv::FONT_HERSHEY_DUPLEX, 1, cv::Scalar(0, 0, 255), 2);
-        }
-    }
+    trackedRectsMap = getTrackedRects(trackedRectsMap, filteredDets, nextIndex);
 
 
-
-
-
-
-    // detectResults 시각화
-    for (auto& detectResult : detectResults)
-        drawDetectResult(image, detectResult, objDetectRoiRect);
-
-    // trackedRects에 있는 것들이 detectResults로 손인지 확인
-    checkIsHand(trackedRectsMap, detectResults, objDetectRoiRect);
-
-    // trackedRect가 2개 이상시, 가장 큰 trackedRect 2개 골라서 시각화
     std::map<int, TrackedRect> resRects;
-    //가장 큰 박스 2개 반환
+
     if (trackedRectsMap.size() >= 2)
         resRects = getResRects(trackedRectsMap);
     else
         resRects = trackedRectsMap;
 
-    // trackedRects 시각화
     for (auto& trackedRect : resRects)
         drawTrackedRect(image, trackedRect);
 
-    cv::rectangle(image, handRoiRect, cv::Scalar(255, 0, 0), 1);  // 사각형 그리기
-    cv::rectangle(image, objDetectRoiRect, cv::Scalar(0, 255, 0), 1);  // 사각형 그리기
 
 
     cv::Mat rotatedImage = wheelImage.clone();
@@ -293,21 +211,28 @@ float ASimulatorGameModeBase::calculateIOU(const cv::Rect& rect1, const cv::Rect
 
 
 
-std::map<int, ASimulatorGameModeBase::TrackedRect> ASimulatorGameModeBase::getTrackedRects(std::map<int, TrackedRect> trackedRects, std::vector<cv::Rect> skinRegions, uint32_t& nextId)
+
+
+
+
+
+
+
+std::map<int, ASimulatorGameModeBase::TrackedRect> ASimulatorGameModeBase::getTrackedRects(std::map<int, TrackedRect> trackedRects, std::vector<Blaze::PalmDetection> filteredDets, uint32_t& nextId)
 {
     std::vector<int> foundIndex;
 
-    for (const cv::Rect& skinRegion : skinRegions)
+    for (const Blaze::PalmDetection& filteredDet : filteredDets)
     {
         bool foundMatch = false;
         for (auto& trackedRect : trackedRects)
         {
             // Calculate IOU between detected rectangle and tracked rectangle
-            float iou = calculateIOU(skinRegion, trackedRect.second.rect);
+            float iou = calculateIOU(filteredDet.rect, trackedRect.second.rect);
 
             // If IOU is above a threshold, update the tracked rectangle
             if (iou > 0.4) {
-                trackedRect.second.rect = skinRegion;
+                trackedRect.second.rect = filteredDet.rect;
                 foundMatch = true;
                 foundIndex.push_back(trackedRect.first);
                 break;
@@ -316,9 +241,9 @@ std::map<int, ASimulatorGameModeBase::TrackedRect> ASimulatorGameModeBase::getTr
 
         // If no match found, add new tracked rectangle
         if (!foundMatch) {
-            trackedRects[nextId].rect = skinRegion;
-            trackedRects[nextId].lifespan = 5;
-            trackedRects[nextId].isHandDetected = false;
+            trackedRects[nextId].rect = filteredDet.rect;
+            trackedRects[nextId].lifespan = 10;
+            trackedRects[nextId].isHandDetected = true;
             nextId++;
         }
     }
@@ -354,6 +279,17 @@ std::map<int, ASimulatorGameModeBase::TrackedRect> ASimulatorGameModeBase::getTr
 }
 
 
+
+
+
+
+
+
+
+
+
+
+
 std::map<int, ASimulatorGameModeBase::TrackedRect> ASimulatorGameModeBase::getResRects(std::map<int, TrackedRect> trackedRects)
 {
     std::map<int, TrackedRect> resRects;
@@ -371,6 +307,14 @@ std::map<int, ASimulatorGameModeBase::TrackedRect> ASimulatorGameModeBase::getRe
 
     return resRects;
 }
+
+
+
+
+
+
+
+
 
 
 void ASimulatorGameModeBase::drawTrackedRect(cv::Mat frame, std::pair<int, TrackedRect> trackedRect)
@@ -420,178 +364,6 @@ cv::Mat ASimulatorGameModeBase::overlayTransparent(const cv::Mat& background_img
 
     return bg_img;
 }
-
-
-std::vector<cv::Rect> ASimulatorGameModeBase::getSkinRegions(cv::Mat frame, cv::Rect roi, cv::Scalar lowerBound, cv::Scalar upperBound, cv::Mat kernel)
-{
-    cv::Mat frameHSV;
-    cv::Mat croppedFrame = frame(roi);
-    cv::cvtColor(croppedFrame, frameHSV, cv::COLOR_BGR2HSV);  // BGR을 HSV로 변환
-
-    cv::Mat skinMask;
-    cv::inRange(frameHSV, lowerBound, upperBound, skinMask);  // 살색 범위에 속하는 픽셀을 마스크로 생성
-
-    cv::Mat skin;
-    cv::bitwise_and(croppedFrame, croppedFrame, skin, skinMask);  // 원본 이미지와 마스크를 이용하여 살색 영역 추출
-
-    cv::Mat skinGray;
-    cv::cvtColor(skin, skinGray, cv::COLOR_BGR2GRAY);  // 추출한 살색 영역을 그레이스케일로 변환
-
-    cv::Mat closing;
-    cv::morphologyEx(skinGray, closing, cv::MORPH_CLOSE, kernel);
-
-
-    std::vector<std::vector<cv::Point>> contours;
-    cv::findContours(closing, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);  // 윤곽선 검출
-
-    std::vector<cv::Rect> skinRegions;
-    for (const std::vector<cv::Point>& contour : contours) {
-        cv::Rect rect = cv::boundingRect(contour);  // 윤곽선을 감싸는 사각형 생성
-        auto area = rect.width * rect.height;
-        if ((area >= 70 * 70) && (area <= 300 * 200))
-        {
-            rect.x += roi.x;
-            rect.y += roi.y;
-            skinRegions.push_back(rect);  // 사각형을 벡터에 추가
-        }
-    }
-
-    return skinRegions;
-}
-
-
-float ASimulatorGameModeBase::sigmoid(float x) {
-    return 1 / (1 + exp(-x));
-}
-
-
-
-ASimulatorGameModeBase::DetectResult ASimulatorGameModeBase::getDetectResult(cv::Mat& frame, cv::Mat regressor, cv::Mat classificator,
-    int stride, int anchor_count, int column, int row, int anchor, int offset,
-    cv::Size detectInputSize, cv::Size detectOutputSize) {
-
-    DetectResult res{ 0.0f, 0, 0, 0, 0 };
-
-    int index = (int(row * 128 / stride) + column) * anchor_count + anchor + offset;
-    float origin_score = regressor.at<float>(0, index, 0);
-    float score = sigmoid(origin_score);
-    if (score < 0.5) return res;
-
-    float x = classificator.at<float>(0, index, 0);
-    float y = classificator.at<float>(0, index, 1);
-    float w = classificator.at<float>(0, index, 2);
-    float h = classificator.at<float>(0, index, 3);
-
-
-    x += (column + 0.5) * stride - w / 2;
-    y += (row + 0.5) * stride - h / 2;
-
-    float width_ratio = static_cast<float>(detectOutputSize.width) / static_cast<float>(detectInputSize.width);
-    float height_radio = static_cast<float>(detectOutputSize.height) / static_cast<float>(detectInputSize.height);
-    res.score = score;
-    res.x = int(x * width_ratio);
-    res.y = int(y * height_radio);
-    res.w = int(w * width_ratio);
-    res.h = int(h * height_radio);
-    return res;
-}
-
-
-std::vector<ASimulatorGameModeBase::DetectResult> ASimulatorGameModeBase::getDetectResults(cv::Mat frame, cv::dnn::Net net, cv::Size detectInputSize, cv::Size detectOutputSize)
-{
-    std::vector<DetectResult> beforeNMSResults;
-    std::vector<DetectResult> afterNMSResults;
-    std::vector<float> scores;
-    std::vector<int> indices;
-    std::vector<cv::Rect> boundingBoxes;
-
-    cv::Mat inputImg;
-    cv::resize(frame, inputImg, detectInputSize);
-    cv::cvtColor(inputImg, inputImg, cv::COLOR_BGR2RGB);
-
-    cv::Mat tensor;
-    inputImg.convertTo(tensor, CV_32F, 1 / 127.5, -1.0);
-    cv::Mat blob = cv::dnn::blobFromImage(tensor, 1.0, tensor.size(), 0, false, false, CV_32F);
-    std::vector<cv::String> outNames(2);
-    outNames[0] = "regressors";
-    outNames[1] = "classificators";
-
-    net.setInput(blob);
-    std::vector<cv::Mat> outputs;
-    net.forward(outputs, outNames);
-
-    cv::Mat classificator = outputs[0];
-    cv::Mat regressor = outputs[1];
-
-
-    for (int y = 0; y < 16; ++y) {
-        for (int x = 0; x < 16; ++x) {
-            for (int a = 0; a < 2; ++a) {
-                DetectResult res = getDetectResult(frame, regressor, classificator, 8, 2, x, y, a, 0, detectInputSize, detectOutputSize);
-                if (res.score != 0)
-                {
-                    beforeNMSResults.push_back(res);
-                    boundingBoxes.push_back(cv::Rect(res.x, res.y, res.w, res.h));
-                    scores.push_back(res.score);
-                }
-            }
-        }
-    }
-
-    for (int y = 0; y < 8; ++y) {
-        for (int x = 0; x < 8; ++x) {
-            for (int a = 0; a < 6; ++a) {
-                DetectResult res = getDetectResult(frame, regressor, classificator, 16, 6, x, y, a, 512, detectInputSize, detectOutputSize);
-                if (res.score != 0)
-                {
-                    beforeNMSResults.push_back(res);
-                    boundingBoxes.push_back(cv::Rect(res.x, res.y, res.w, res.h));
-                    scores.push_back(res.score);
-                }
-            }
-        }
-    }
-
-    cv::dnn::NMSBoxes(boundingBoxes, scores, 0.5, 0.3, indices);
-
-    for (int i = 0; i < indices.size(); i++) {
-        int idx = indices[i];
-        afterNMSResults.push_back(beforeNMSResults[idx]);
-    }
-
-    return afterNMSResults;
-}
-
-void ASimulatorGameModeBase::drawDetectResult(cv::Mat frame, ASimulatorGameModeBase::DetectResult res, cv::Rect objDetectRoi)
-{
-    cv::putText(
-        frame, cv::String(std::to_string(res.score)),
-        cv::Point(int(res.x + objDetectRoi.x), int(res.y + objDetectRoi.y - 20)),
-        cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 0, 255)
-    );
-    cv::rectangle(frame, cv::Rect(res.x + objDetectRoi.x, res.y + objDetectRoi.y, res.w, res.h), cv::Scalar(0, 0, 255), 1);  // 사각형 그리기
-}
-
-
-// 가장 큰 trackedRects 2개(resRects)와 detectResults로 손인지 확인
-void ASimulatorGameModeBase::checkIsHand(std::map<int, ASimulatorGameModeBase::TrackedRect>& trackedRects, std::vector<DetectResult>& detectResults, cv::Rect objDetectRoi)
-{
-    for (auto& trackedRect : trackedRects)
-    {
-        for (auto& detectResult : detectResults)
-        {
-            cv::Rect detectResultRect{ detectResult.x + objDetectRoi.x, detectResult.y + objDetectRoi.y, detectResult.w, detectResult.h };
-            float iou = calculateIOU(detectResultRect, trackedRect.second.rect);
-
-            if (iou > 0.4) {
-                trackedRect.second.isHandDetected = true;
-            }
-        }
-    }
-}
-
-
-
 
 
 float ASimulatorGameModeBase::getWheelAngle(std::map<int, TrackedRect> resRects)
@@ -821,7 +593,7 @@ void ASimulatorGameModeBase::buttonEvent(cv::Mat frame, std::map<int, ASimulator
     }
 
     cv::Point2f center(rightRect.rect.x + rightRect.rect.width / 2.0f, rightRect.rect.y + rightRect.rect.height / 2.0f);
-    cv::circle(frame, center, 5, cv::Scalar(0, 0, 0), -1);
+    cv::circle(frame, center, 10, cv::Scalar(0, 0, 0), -1);
 
     //센터점이 버튼에들어갔는지 확인
     std::vector<bool> isPointInButtonVector;
@@ -893,186 +665,4 @@ void ASimulatorGameModeBase::buttonEvent(cv::Mat frame, std::map<int, ASimulator
     {
         isOutOfButton = true;
     }
-}
-
-
-
-
-
-
-
-
-
-
-cv::Mat ASimulatorGameModeBase::get_image_points_2D()
-{
-    cv::Mat image_points_2D = cv::Mat::zeros(6, 2, CV_64F);
-    image_points_2D.at<double>(0, 0) = 0;  // right eye
-    image_points_2D.at<double>(0, 1) = 0;
-    image_points_2D.at<double>(1, 0) = 0;  // left eye
-    image_points_2D.at<double>(1, 1) = 0;
-    image_points_2D.at<double>(2, 0) = 0;  // nose tip
-    image_points_2D.at<double>(2, 1) = 0;
-    image_points_2D.at<double>(3, 0) = 0;  // right mouth corner
-    image_points_2D.at<double>(3, 1) = 0;
-    image_points_2D.at<double>(4, 0) = 0;  // left mouth corner
-    image_points_2D.at<double>(4, 1) = 0;
-    image_points_2D.at<double>(5, 0) = 0;  // chin
-    image_points_2D.at<double>(5, 1) = 0;
-    return image_points_2D;
-}
-
-cv::Mat ASimulatorGameModeBase::get_figure_points_3D()
-{
-    cv::Mat figure_points = cv::Mat::zeros(6, 3, CV_64F);
-    figure_points.at<double>(0, 0) = 180.0;     // Right eye right corner
-    figure_points.at<double>(0, 1) = 170.0;
-    figure_points.at<double>(0, 2) = -135.0;
-    figure_points.at<double>(1, 0) = -180.0;    // Left eye left corner
-    figure_points.at<double>(1, 1) = 170.0;
-    figure_points.at<double>(1, 2) = -135.0;
-    figure_points.at<double>(2, 0) = 0.0;       // Nose tip
-    figure_points.at<double>(2, 1) = 0.0;
-    figure_points.at<double>(2, 2) = 0.0;
-    figure_points.at<double>(3, 0) = 150.0;     // Right mouth corner
-    figure_points.at<double>(3, 1) = -150.0;
-    figure_points.at<double>(3, 2) = -125.0;
-    figure_points.at<double>(4, 0) = -150.0;    // Left mouth corner
-    figure_points.at<double>(4, 1) = -150.0;
-    figure_points.at<double>(4, 2) = -125.0;
-    figure_points.at<double>(5, 0) = 0.0;       // Chin
-    figure_points.at<double>(5, 1) = -330.0;
-    figure_points.at<double>(5, 2) = -65.0;
-    return figure_points;
-}
-
-cv::Mat ASimulatorGameModeBase::get_camera_matrix()
-{
-    cv::Mat matrix_camera = cv::Mat::eye(3, 3, CV_64F);
-    matrix_camera.at<double>(0, 0) = 1013.80634;
-    matrix_camera.at<double>(0, 2) = 632.511658;
-    matrix_camera.at<double>(1, 1) = 1020.62616;
-    matrix_camera.at<double>(1, 2) = 259.604004;
-    return matrix_camera;
-}
-
-cv::Mat ASimulatorGameModeBase::get_distortion_coeff()
-{
-    cv::Mat distortion_coeffs = cv::Mat::zeros(1, 5, CV_64F);
-    distortion_coeffs.at<double>(0, 0) = 0.05955474;
-    distortion_coeffs.at<double>(0, 1) = -0.6827085;
-    distortion_coeffs.at<double>(0, 2) = -0.03125953;
-    distortion_coeffs.at<double>(0, 3) = -0.00254411;
-    distortion_coeffs.at<double>(0, 4) = 1.316122;
-    return distortion_coeffs;
-}
-
-void ASimulatorGameModeBase::estimate_chin(cv::Mat& image_points_2D)
-{
-    cv::Point eye_midpoint((image_points_2D.at<double>(0, 0) + image_points_2D.at<double>(1, 0)) / 2, (image_points_2D.at<double>(0, 1) + image_points_2D.at<double>(1, 1)) / 2);
-    cv::Point mouth_midpoint((image_points_2D.at<double>(3, 0) + image_points_2D.at<double>(4, 0)) / 2, (image_points_2D.at<double>(3, 1) + image_points_2D.at<double>(4, 1)) / 2);
-
-    double slope;
-    double intercept;
-
-    double chin_x = 0;
-    double chin_y = mouth_midpoint.y - (eye_midpoint.y - mouth_midpoint.y) / 2;
-
-    if ((eye_midpoint.x - mouth_midpoint.x) == 0)
-    {
-        chin_x = mouth_midpoint.x;
-
-    }
-    else
-    {
-        // 두 중간 점을 지나는 직선 계산
-        slope = (eye_midpoint.y - mouth_midpoint.y) / (eye_midpoint.x - mouth_midpoint.x);
-        intercept = eye_midpoint.y - slope * eye_midpoint.x;
-
-        if (slope == std::numeric_limits<double>::infinity() || intercept == std::numeric_limits<double>::infinity()) {
-            chin_x = mouth_midpoint.x;
-        }
-        else {
-            chin_x = (chin_y - intercept) / slope;
-        }
-    }
-    image_points_2D.at<double>(5, 0) = int(chin_x);
-    image_points_2D.at<double>(5, 1) = int(chin_y);
-}
-
-
-bool ASimulatorGameModeBase::visualize(cv::Mat& frame, const cv::Mat& faces, cv::Mat& image_points_2D)
-{
-    bool res = false;
-    static cv::Scalar box_color{ 0, 255, 0 };
-    static cv::Scalar text_color{ 0, 255, 0 };
-
-    std::vector<cv::Scalar> landmark_color = {
-        cv::Scalar(255, 0, 0),  // right eye
-        cv::Scalar(0, 0, 255),  // left eye
-        cv::Scalar(0, 255, 0),  // nose tip
-        cv::Scalar(255, 0, 255),// right mouth corner
-        cv::Scalar(0, 255, 255) // left mouth corner
-    };
-
-
-    for (int i = 0; i < faces.rows; ++i)
-    {
-        // Draw bounding boxes
-        int x1 = static_cast<int>(faces.at<float>(i, 0)) * 2;
-        int y1 = static_cast<int>(faces.at<float>(i, 1)) * 2;
-        int w = static_cast<int>(faces.at<float>(i, 2)) * 2;
-        int h = static_cast<int>(faces.at<float>(i, 3)) * 2;
-        cv::rectangle(frame, cv::Rect(x1, y1, w, h), box_color, 2);
-
-        // Confidence as text
-        float conf = faces.at<float>(i, 14);
-        cv::putText(frame, cv::format("%.4f", conf), cv::Point(x1, y1 + 12), cv::FONT_HERSHEY_DUPLEX, 0.5, text_color);
-        // Draw landmarks
-        for (int j = 0; j < landmark_color.size(); ++j)
-        {
-            res = true;
-            int x = static_cast<int>(faces.at<float>(i, 2 * j + 4)) * 2, y = static_cast<int>(faces.at<float>(i, 2 * j + 5)) * 2;
-            cv::circle(frame, cv::Point(x, y), 2, landmark_color[j], 2);
-            //std::cout << x << "," << y << std::endl;
-            image_points_2D.at<double>(j, 0) = static_cast<double>(x);
-            image_points_2D.at<double>(j, 1) = static_cast<double>(y);
-        }
-    }
-
-    return res;
-}
-
-std::vector<cv::Point2d> ASimulatorGameModeBase::get_pose_points(cv::Mat& image_points_2D, cv::Mat& vector_rot, cv::Mat& vector_tran, cv::Mat& camera_mat, cv::Mat& distort_coeff)
-{
-    std::vector<cv::Point2d> pose_points;
-    cv::Mat nose_end_point3D = (cv::Mat_<double>(1, 3) << 0, 0, 1000.0);
-    cv::Mat nose_end_point2D;
-    cv::projectPoints(nose_end_point3D, vector_rot, vector_tran, camera_mat, distort_coeff, nose_end_point2D);
-
-    cv::Point2d point1(image_points_2D.at<double>(2, 0), image_points_2D.at<double>(2, 1));
-    cv::Point2d point2(nose_end_point2D.at<double>(0, 0), nose_end_point2D.at<double>(0, 1));
-
-    pose_points.push_back(point1);
-    pose_points.push_back(point2);
-    return pose_points;
-}
-
-float ASimulatorGameModeBase::clip_avg(std::vector<int> xdiff_vec)
-{
-    float xdiff_vector_sum = std::accumulate(xdiff_vec.begin(), xdiff_vec.end(), 0.0);
-    float avg = xdiff_vector_sum / xdiff_vec.size();
-
-
-    if (avg >= 15) {
-        avg += -15;
-    }
-    else if (avg > -15 && avg < 15) {
-        avg = 0;
-    }
-    else {
-        avg += 15;
-    }
-
-    return avg / 2;
 }
