@@ -95,6 +95,8 @@ public:
 	cv::Mat drawAndGetRotatedPoints(cv::Mat frame, cv::Point2f wheelStartPoint, cv::Mat Points, cv::Mat rotationMat);
 	void wheelCheck(cv::Mat frame, bool& wheelLeftChecked, bool& wheelRightChecked, cv::Point2f wheelStartPoint, cv::Mat rotatedPoints, std::map<int, TrackedRect> resRects);
 	float getWheelAngle(std::map<int, TrackedRect> resRects);
+	float getWheelAngleWithCenter(std::map<int, TrackedRect> resRects);
+
 	void setHandPos(std::map<int, TrackedRect> resRects);
 	std::vector<Button> initButtons();
 	void drawButtons(cv::Mat frame, std::vector<Button> buttons);

@@ -166,6 +166,17 @@ void ASimulatorGameModeBase::Inference()
             is_handle = true;
             wheelAngle = getWheelAngle(resRects);
         }
+        else if (wheelLeftChecked == true && wheelRightChecked == false)
+        {
+            is_handle = true;
+            wheelAngle = getWheelAngleWithCenter(resRects);
+
+        }
+        else if (wheelLeftChecked == false && wheelRightChecked == true)
+        {
+            is_handle = true;
+
+        }
         else
             is_handle = false;
     }
@@ -231,7 +242,7 @@ std::map<int, ASimulatorGameModeBase::TrackedRect> ASimulatorGameModeBase::getTr
             float iou = calculateIOU(filteredDet.rect, trackedRect.second.rect);
 
             // If IOU is above a threshold, update the tracked rectangle
-            if (iou > 0.4) {
+            if (iou > 0.3) {
                 trackedRect.second.rect = filteredDet.rect;
                 foundMatch = true;
                 foundIndex.push_back(trackedRect.first);
@@ -389,6 +400,39 @@ float ASimulatorGameModeBase::getWheelAngle(std::map<int, TrackedRect> resRects)
     float angle = (-1) * atan2(dy, dx) * 180.0f / CV_PI;
     return angle;
 }
+
+float ASimulatorGameModeBase::getWheelAngleWithCenter(std::map<int, TrackedRect> resRects)
+{
+    TrackedRect leftRect = resRects.begin()->second;
+    TrackedRect rightRect = resRects.begin()->second;
+
+    for (auto& trackedRect : resRects)
+    {
+        if (trackedRect.second.rect.x < leftRect.rect.x)
+            leftRect = trackedRect.second;
+
+        if (trackedRect.second.rect.x > rightRect.rect.x)
+            rightRect = trackedRect.second;
+    }
+
+    // 두 개의 직사각형 중심점 계산
+    cv::Point2f center1(leftRect.rect.x + leftRect.rect.width / 2.0f, leftRect.rect.y + leftRect.rect.height / 2.0f);
+    cv::Point2f center2(wheelStartPos.x + 120, wheelStartPos.y + 120);
+    // 두 중심점을 연결하는 선의 기울기 계산
+    float dx = center2.x - center1.x;
+    float dy = center2.y - center1.y;
+    float angle = (-1) * atan2(dy, dx) * 180.0f / CV_PI;
+
+
+    return angle;
+}
+
+
+
+
+
+
+
 
 
 void ASimulatorGameModeBase::setHandPos(std::map<int, TrackedRect> resRects)
